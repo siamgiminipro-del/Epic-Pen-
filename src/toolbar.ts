@@ -147,6 +147,14 @@ export function initToolbar() {
         </svg>
       </button>
 
+      <button id="btn-pressure" class="tool-btn active" title="Toggle Pressure Sensitivity (Stylus / Apple Pencil / Force Touch)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>
+          <path d="m14 6 4 4"/>
+          <path d="M2 22c3.5-1 5-3.5 5-3.5"/>
+        </svg>
+      </button>
+
       <div class="divider"></div>
 
       <!-- Close / Exit App -->
@@ -163,6 +171,7 @@ export function initToolbar() {
   let boardModeIndex = 0;
   const boardModes: BoardMode[] = ["desktop", "whiteboard", "blackboard"];
   let isInkVisible = true;
+  let isPressureActive = true;
 
   const shapesPopup = document.getElementById("shapes-popup")!;
   const btnShapes = document.getElementById("btn-shapes")!;
@@ -246,6 +255,13 @@ export function initToolbar() {
   document.getElementById("btn-visibility")?.addEventListener("click", () => {
     isInkVisible = !isInkVisible;
     emit("toggle-visibility", { visible: isInkVisible });
+  });
+
+  const btnPressure = document.getElementById("btn-pressure");
+  btnPressure?.addEventListener("click", () => {
+    isPressureActive = !isPressureActive;
+    btnPressure.classList.toggle("active", isPressureActive);
+    emit("toggle-pressure", { enabled: isPressureActive });
   });
 
   document.getElementById("btn-close")?.addEventListener("click", async () => {

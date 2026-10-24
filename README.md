@@ -12,6 +12,7 @@ A high-performance, lightweight screen annotation and live presentation tool for
 - 🖱️ **Click-Through (Cursor Mode)**: Switch seamlessly between Draw Mode and Mouse Mode. In Cursor Mode, your clicks pass straight through to macOS apps underneath while keeping your drawings visible.
 - ✍️ **Drawing Tools**:
   - **Pen**: Freehand drawing with smooth quadratic Bézier curve interpolation.
+  - **Pressure Sensitivity**: Full stylus/Apple Pencil, graphics tablet, Mac Force Touch trackpad, and velocity tapering support with toggle on toolbar.
   - **Highlighter**: Semi-transparent highlighter with smooth color blending.
   - **Eraser**: Rub out strokes easily.
   - **Shapes**: Straight Line, Arrow with arrowhead, Rectangle, and Ellipse/Circle.

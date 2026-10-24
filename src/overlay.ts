@@ -16,6 +16,9 @@ export type BoardMode = "desktop" | "whiteboard" | "blackboard";
 interface Point {
   x: number;
   y: number;
+  pressure: number;
+  time: number;
+  width: number;
 }
 
 export function initOverlay() {
@@ -33,9 +36,11 @@ export function initOverlay() {
   // Drawing state
   let currentTool: Tool = "pen";
   let currentColor = "#ef4444";
-  let currentSize = 5;
+  let currentSize = 6;
+  let isPressureEnabled = true;
+  let smoothedWidth = currentSize;
   let isDrawing = false;
-  let startPoint: Point = { x: 0, y: 0 };
+  let startPoint: Point = { x: 0, y: 0, pressure: 0.5, time: 0, width: currentSize };
   let points: Point[] = [];
 
   // Undo/Redo stack (offscreen canvas snapshots)
@@ -138,44 +143,83 @@ export function initOverlay() {
     }
   }
 
-  // Pointer event handlers
-  function getCoordinates(e: PointerEvent): Point {
-    return { x: e.clientX, y: e.clientY };
+  // Compute point with hardware pressure or speed dynamics
+  function createPoint(e: PointerEvent, prev?: Point): Point {
+    let p = 0.5;
+    if (isPressureEnabled) {
+      // 1. Hardware Stylus / Apple Pencil / Force Touch Trackpad
+      if (e.pointerType === "pen" || (e.pressure > 0 && e.pressure !== 0.5)) {
+        p = Math.max(0.1, Math.min(1.0, e.pressure));
+      } else if (prev) {
+        // 2. Velocity-based pressure dynamics fallback for standard mouse
+        const dx = e.clientX - prev.x;
+        const dy = e.clientY - prev.y;
+        const dist = Math.hypot(dx, dy);
+        const dt = Math.max(1, Date.now() - prev.time);
+        const speed = dist / dt; // pixels per ms
+        // Faster mouse stroke -> thinner line; slower -> thicker line
+        p = Math.max(0.2, Math.min(1.0, 1.0 - speed * 0.22));
+      }
+    }
+
+    // Dynamic width calculated from pressure
+    const targetWidth = isPressureEnabled
+      ? Math.max(1.5, currentSize * (0.25 + p * 1.5))
+      : currentSize;
+
+    // Smooth transition using exponential moving average
+    smoothedWidth = prev
+      ? smoothedWidth * 0.65 + targetWidth * 0.35
+      : targetWidth;
+
+    return {
+      x: e.clientX,
+      y: e.clientY,
+      pressure: p,
+      time: Date.now(),
+      width: smoothedWidth,
+    };
   }
 
+  // Pointer event handlers
   canvas.addEventListener("pointerdown", (e) => {
     if (currentTool === "cursor") return;
     isDrawing = true;
-    startPoint = getCoordinates(e);
+    startPoint = createPoint(e);
     points = [startPoint];
 
-    if (currentTool === "pen" || currentTool === "highlighter" || currentTool === "eraser") {
+    if (currentTool === "pen" || currentTool === "highlighter") {
       ctx.beginPath();
-      ctx.moveTo(startPoint.x, startPoint.y);
+      ctx.arc(startPoint.x, startPoint.y, startPoint.width / 2, 0, Math.PI * 2);
+      ctx.fillStyle = currentTool === "highlighter" ? hexToRgba(currentColor, 0.35) : currentColor;
+      ctx.fill();
+    } else if (currentTool === "eraser") {
+      ctx.globalCompositeOperation = "destination-out";
+      ctx.beginPath();
+      ctx.arc(startPoint.x, startPoint.y, (currentSize * 4) / 2, 0, Math.PI * 2);
+      ctx.fill();
     }
   });
 
   canvas.addEventListener("pointermove", (e) => {
     if (!isDrawing || currentTool === "cursor") return;
-    const current = getCoordinates(e);
+    const prev = points[points.length - 1];
+    const current = createPoint(e, prev);
     points.push(current);
 
     if (currentTool === "pen") {
       ctx.globalCompositeOperation = "source-over";
       ctx.strokeStyle = currentColor;
-      ctx.lineWidth = currentSize;
-      drawSmoothCurve(points);
+      drawSmoothCurve(points, false);
     } else if (currentTool === "highlighter") {
       ctx.globalCompositeOperation = "source-over";
       ctx.strokeStyle = hexToRgba(currentColor, 0.35);
-      ctx.lineWidth = currentSize * 3;
-      drawSmoothCurve(points);
+      drawSmoothCurve(points, true);
     } else if (currentTool === "eraser") {
       ctx.globalCompositeOperation = "destination-out";
       ctx.lineWidth = currentSize * 4;
       ctx.beginPath();
-      const p1 = points[points.length - 2] || current;
-      ctx.moveTo(p1.x, p1.y);
+      ctx.moveTo(prev.x, prev.y);
       ctx.lineTo(current.x, current.y);
       ctx.stroke();
     } else {
@@ -194,9 +238,15 @@ export function initOverlay() {
   function endDrawing(e: PointerEvent) {
     if (!isDrawing) return;
     isDrawing = false;
-    const endPoint = getCoordinates(e);
+    const prev = points[points.length - 1];
+    const endPoint = createPoint(e, prev);
+    points.push(endPoint);
 
-    if (
+    if (currentTool === "pen") {
+      finishSmoothCurve(points, false);
+    } else if (currentTool === "highlighter") {
+      finishSmoothCurve(points, true);
+    } else if (
       currentTool === "line" ||
       currentTool === "arrow" ||
       currentTool === "rectangle" ||
@@ -215,20 +265,41 @@ export function initOverlay() {
   canvas.addEventListener("pointerup", endDrawing);
   canvas.addEventListener("pointercancel", endDrawing);
 
-  // Smooth curve rendering with Bézier midpoints
-  function drawSmoothCurve(pts: Point[]) {
+  // Smooth curve rendering with Bézier midpoints and variable width
+  function drawSmoothCurve(pts: Point[], isHighlighter = false) {
     if (pts.length < 2) return;
     const p1 = pts[pts.length - 2];
     const p2 = pts[pts.length - 1];
-    const midPoint = {
-      x: (p1.x + p2.x) / 2,
-      y: (p1.y + p2.y) / 2,
-    };
 
+    ctx.lineWidth = isHighlighter ? currentSize * 3 : p2.width;
     ctx.beginPath();
-    ctx.moveTo(p1.x, p1.y);
-    ctx.quadraticCurveTo(p1.x, p1.y, midPoint.x, midPoint.y);
+    if (pts.length === 2) {
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo((p1.x + p2.x) / 2, (p1.y + p2.y) / 2);
+    } else {
+      const p0 = pts[pts.length - 3];
+      const prevMidX = (p0.x + p1.x) / 2;
+      const prevMidY = (p0.y + p1.y) / 2;
+      const midX = (p1.x + p2.x) / 2;
+      const midY = (p1.y + p2.y) / 2;
+      ctx.moveTo(prevMidX, prevMidY);
+      ctx.quadraticCurveTo(p1.x, p1.y, midX, midY);
+    }
     ctx.stroke();
+  }
+
+  function finishSmoothCurve(pts: Point[], isHighlighter = false) {
+    if (pts.length >= 2) {
+      const pPrev = pts[pts.length - 2];
+      const pLast = pts[pts.length - 1];
+      const midX = (pPrev.x + pLast.x) / 2;
+      const midY = (pPrev.y + pLast.y) / 2;
+      ctx.lineWidth = isHighlighter ? currentSize * 3 : pLast.width;
+      ctx.beginPath();
+      ctx.moveTo(midX, midY);
+      ctx.lineTo(pLast.x, pLast.y);
+      ctx.stroke();
+    }
   }
 
   // Draw geometrical shapes
@@ -297,6 +368,10 @@ export function initOverlay() {
 
   listen<{ size: number }>("change-size", (event) => {
     currentSize = event.payload.size;
+  });
+
+  listen<{ enabled: boolean }>("toggle-pressure", (event) => {
+    isPressureEnabled = event.payload.enabled;
   });
 
   listen("action-undo", () => {
